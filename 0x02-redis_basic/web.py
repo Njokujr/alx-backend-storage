@@ -1,45 +1,38 @@
 #!/usr/bin/env python3
-"""5. Implementing an expiring web cache and tracker"""
-
-from requests import get
+'''A module with tools for request caching and tracking.
+'''
 import redis
+import requests
 from functools import wraps
 from typing import Callable
 
-import time
 
-# Decorator for caching
-def cache_with_expiry(seconds):
-    cache = {}
+redis_store = redis.Redis()
+'''The module-level Redis instance.
+'''
 
-    def decorator(func):
-        def wrapper(url):
-            if url in cache and time.time() - cache[url]['timestamp'] < seconds:
-                print(f"Cache hit for {url}")
-                return cache[url]['content']
-            else:
-                print(f"Cache miss for {url}")
-                content = func(url)
-                cache[url] = {
-                    'content': content,
-                    'timestamp': time.time()
-                }
-                return content
-        return wrapper
-    return decorator
 
-@cache_with_expiry(seconds=10)
-def get_page(url):
-    response = requests.get(url)
-    return response.text
+def data_cacher(method: Callable) -> Callable:
+    '''Caches the output of fetched data.
+    '''
+    @wraps(method)
+    def invoker(url) -> str:
+        '''The wrapper function for caching the output.
+        '''
+        redis_store.incr(f'count:{url}')
+        result = redis_store.get(f'result:{url}')
+        if result:
+            return result.decode('utf-8')
+        result = method(url)
+        redis_store.set(f'count:{url}', 0)
+        redis_store.setex(f'result:{url}', 10, result)
+        return result
+    return invoker
 
-# Test the function
-url_to_fetch = "http://slowwly.robertomurray.co.uk/delay/5000/url/https://example.com"  # Example slow URL
-page_content = get_page(url_to_fetch)
-print(page_content)
 
-# Test again after 5 seconds to check the caching
-time.sleep(5)
-page_content_cached = get_page(url_to_fetch)
-print(page_content_cached)
-
+@data_cacher
+def get_page(url: str) -> str:
+    '''Returns the content of a URL after caching the request's response,
+    and tracking the request.
+    '''
+    return requests.get(url).text
